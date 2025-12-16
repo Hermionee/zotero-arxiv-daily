@@ -11,7 +11,6 @@ from loguru import logger
 import tiktoken
 from contextlib import ExitStack
 import urllib.error
-import time
 
 
 
@@ -196,43 +195,67 @@ class ArxivPaper:
 
     @cached_property
     def affiliations(self) -> Optional[list[str]]:
-        if self.tex is not None:
-            content = self.tex.get("all")
-            if content is None:
-                content = "\n".join(v for v in self.tex.values() if v is not None)
-            #search for affiliations
-            possible_regions = [r'\\author.*?\\maketitle',r'\\begin{document}.*?\\begin{abstract}']
-            matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
-            match = next((m for m in matches if m), None)
-            if match:
-                information_region = match.group(0)
-            else:
-                logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: No author information found.")
-                return None
-            prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
-            # use gpt-4o tokenizer for estimation
-            enc = tiktoken.encoding_for_model("gpt-4o")
-            prompt_tokens = enc.encode(prompt)
-            prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
-            prompt = enc.decode(prompt_tokens)
-            llm = get_llm()
-            time.sleep(2.5)
-            affiliations = llm.generate(
+        if self.tex is None:
+            return None
+    
+        content = self.tex.get("all")
+        if content is None:
+            content = "\n".join(v for v in self.tex.values() if v is not None)
+    
+        possible_regions = [
+            r'\\author.*?\\maketitle',
+            r'\\begin{document}.*?\\begin{abstract}'
+        ]
+        matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
+        match = next((m for m in matches if m), None)
+    
+        if not match:
+            logger.debug(f"No author info found for {self.arxiv_id}")
+            return None
+    
+        information_region = match.group(0)
+    
+        prompt = (
+            "Given the author information of a paper in latex format, "
+            "extract the affiliations of the authors in a python list format, "
+            "sorted by author order. If none found, return [].\n\n"
+            f"{information_region}"
+        )
+    
+        llm = get_llm()
+    
+        try:
+            # 🔒 强制限流（未验证账号必须 ≥ 2.5 秒）
+            import time
+            time.sleep(3)
+    
+            raw = llm.generate(
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an assistant who perfectly extracts affiliations of authors from the author information of a paper. You should return a python list of affiliations sorted by the author order, like ['TsingHua University','Peking University']. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
+                        "content": (
+                            "You extract author affiliations from latex. "
+                            "Return ONLY a python list like ['MIT','Stanford']. "
+                            "Remove duplicates. If none, return []."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ]
             )
-
-            try:
-                affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
-                affiliations = eval(affiliations)
-                affiliations = list(set(affiliations))
-                affiliations = [str(a) for a in affiliations]
-            except Exception as e:
-                logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
+    
+            # 解析返回
+            m = re.search(r'\[.*?\]', raw, flags=re.DOTALL)
+            if not m:
+                logger.debug(f"LLM output parse failed for {self.arxiv_id}: {raw}")
                 return None
+    
+            affiliations = eval(m.group(0))
+            affiliations = list(dict.fromkeys(str(a) for a in affiliations))
             return affiliations
+    
+        except Exception as e:
+            # ✅ 关键：吞掉所有 LLM / 403 异常
+            logger.warning(
+                f"Affiliation extraction failed for {self.arxiv_id}, skip. Error: {e}"
+            )
+            return None
