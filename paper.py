@@ -215,6 +215,7 @@ class ArxivPaper:
             prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
             prompt = enc.decode(prompt_tokens)
             llm = get_llm()
+            time.sleep(2.5)
             affiliations = llm.generate(
                 messages=[
                     {
