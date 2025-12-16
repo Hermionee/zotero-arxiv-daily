@@ -128,10 +128,15 @@ def render_email(papers:list[ArxivPaper]):
         authors = ', '.join(authors)
         if len(p.authors) > 5:
             authors += ', ...'
-        if p.affiliations is not None:
-            affiliations = p.affiliations[:5]
-            affiliations = ', '.join(affiliations)
-            if len(p.affiliations) > 5:
+        try:
+            aff = p.affiliations
+        except Exception as e:
+            logger.warning(f"Affiliations failed for {p.arxiv_id}: {e}")
+            aff = None
+
+        if aff:
+            affiliations = ', '.join(aff[:5])
+            if len(aff) > 5:
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
